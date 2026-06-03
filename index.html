@@ -11,7 +11,7 @@
 <title>InvCount</title>
 <link rel="manifest" href="manifest.json">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -617,7 +617,6 @@
   <!-- ESCANEAR -->
   <div class="page" id="page-scan">
     <div class="scan-container" id="scan-container">
-      <video id="scanner-video" playsinline muted autoplay></video>
       <div class="scan-overlay">
         <div class="scan-frame">
           <div class="scan-line"></div>
@@ -761,9 +760,6 @@ let currentModalCode = null;
 let fileType = 'xlsx';
 let rawHeaders = [];
 let rawRows = [];
-let stream = null;
-let barcodeDetector = null;
-let scanInterval = null;
 
 // ---- NAVIGATION ----
 function showPage(name, btn) {
@@ -908,33 +904,60 @@ function resetInventory() {
   showToast('🗑️ Carga removida');
 }
 
-// ---- SCANNER ----
-async function startScanner() {
-  if (!navigator.mediaDevices) { showToast('⚠️ Câmera não disponível'); return; }
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } });
-    const video = document.getElementById('scanner-video');
-    video.srcObject = stream;
+// ---- SCANNER (QuaggaJS - iOS/Android/Desktop) ----
+let quaggaRunning = false;
 
-    if ('BarcodeDetector' in window) {
-      barcodeDetector = new BarcodeDetector({ formats: ['ean_13','ean_8','code_128','code_39','upc_a','upc_e','itf','qr_code'] });
-      scanInterval = setInterval(async () => {
-        try {
-          const codes = await barcodeDetector.detect(video);
-          if (codes.length > 0) onBarcodeDetected(codes[0].rawValue);
-        } catch(e) {}
-      }, 400);
-    } else {
-      showToast('⚠️ Use Chrome/Edge para leitura automática. Use busca manual.');
-    }
-  } catch(e) {
-    showToast('⚠️ Permissão de câmera negada. Use busca manual.');
+async function startScanner() {
+  if (quaggaRunning) return;
+  if (typeof Quagga === 'undefined') {
+    showToast('⚠️ Carregando leitor... tente novamente em 2s');
+    return;
   }
+  const container = document.getElementById('scan-container');
+  // Remove video anterior se existir
+  const old = container.querySelector('#interactive');
+  if (old) old.remove();
+  const div = document.createElement('div');
+  div.id = 'interactive';
+  div.style.cssText = 'width:100%;height:100%;position:absolute;inset:0;';
+  container.insertBefore(div, container.querySelector('.scan-overlay'));
+
+  Quagga.init({
+    inputStream: {
+      name: 'Live',
+      type: 'LiveStream',
+      target: document.getElementById('interactive'),
+      constraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+    },
+    decoder: { readers: ['ean_reader','ean_8_reader','code_128_reader','code_39_reader','upc_reader','upc_e_reader','itf_reader'] },
+    locate: true,
+    frequency: 5
+  }, err => {
+    if (err) {
+      showToast('⚠️ Permissão de câmera negada. Use busca manual.');
+      return;
+    }
+    Quagga.start();
+    quaggaRunning = true;
+    // Esconde video nativo do Quagga e deixa overlay
+    setTimeout(() => {
+      const vid = document.querySelector('#interactive video');
+      if (vid) { vid.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;'; }
+    }, 500);
+  });
+
+  Quagga.offDetected();
+  Quagga.onDetected(result => {
+    const code = result.codeResult.code;
+    if (code) onBarcodeDetected(code);
+  });
 }
 
 function stopScanner() {
-  if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
-  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  if (quaggaRunning && typeof Quagga !== 'undefined') {
+    try { Quagga.stop(); } catch(e) {}
+    quaggaRunning = false;
+  }
 }
 
 function onBarcodeDetected(code) {
