@@ -11,7 +11,7 @@
 <title>InvCount</title>
 <link rel="manifest" href="manifest.json">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -904,59 +904,63 @@ function resetInventory() {
   showToast('🗑️ Carga removida');
 }
 
-// ---- SCANNER (QuaggaJS - iOS/Android/Desktop) ----
-let quaggaRunning = false;
+// ---- SCANNER (html5-qrcode - iOS/Android/Desktop) ----
+let html5QrScanner = null;
 
 async function startScanner() {
-  if (quaggaRunning) return;
-  if (typeof Quagga === 'undefined') {
-    showToast('⚠️ Carregando leitor... tente novamente em 2s');
-    return;
+  if (html5QrScanner) return;
+
+  // Garante que o div reader existe
+  let reader = document.getElementById('qr-reader');
+  if (!reader) {
+    reader = document.createElement('div');
+    reader.id = 'qr-reader';
+    reader.style.cssText = 'width:100%;height:100%;position:absolute;inset:0;overflow:hidden;border-radius:12px;';
+    const container = document.getElementById('scan-container');
+    container.insertBefore(reader, container.querySelector('.scan-overlay'));
   }
-  const container = document.getElementById('scan-container');
-  // Remove video anterior se existir
-  const old = container.querySelector('#interactive');
-  if (old) old.remove();
-  const div = document.createElement('div');
-  div.id = 'interactive';
-  div.style.cssText = 'width:100%;height:100%;position:absolute;inset:0;';
-  container.insertBefore(div, container.querySelector('.scan-overlay'));
 
-  Quagga.init({
-    inputStream: {
-      name: 'Live',
-      type: 'LiveStream',
-      target: document.getElementById('interactive'),
-      constraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-    },
-    decoder: { readers: ['ean_reader','ean_8_reader','code_128_reader','code_39_reader','upc_reader','upc_e_reader','itf_reader'] },
-    locate: true,
-    frequency: 5
-  }, err => {
-    if (err) {
-      showToast('⚠️ Permissão de câmera negada. Use busca manual.');
-      return;
-    }
-    Quagga.start();
-    quaggaRunning = true;
-    // Esconde video nativo do Quagga e deixa overlay
+  try {
+    html5QrScanner = new Html5Qrcode('qr-reader');
+    await html5QrScanner.start(
+      { facingMode: 'environment' },
+      {
+        fps: 10,
+        qrbox: { width: 200, height: 120 },
+        aspectRatio: 1.7,
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.ITF,
+        ]
+      },
+      (code) => { onBarcodeDetected(code); },
+      () => {}
+    );
+
+    // Estiliza o vídeo gerado pela lib
     setTimeout(() => {
-      const vid = document.querySelector('#interactive video');
-      if (vid) { vid.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;'; }
-    }, 500);
-  });
+      const vid = document.querySelector('#qr-reader video');
+      if (vid) vid.style.cssText = 'width:100%!important;height:100%!important;object-fit:cover;position:absolute;inset:0;border-radius:12px;';
+      // Esconde UI padrão da lib
+      const ui = document.querySelectorAll('#qr-reader__dashboard, #qr-reader__status_span, #qr-reader__header_message');
+      ui.forEach(el => { if(el) el.style.display = 'none'; });
+    }, 800);
 
-  Quagga.offDetected();
-  Quagga.onDetected(result => {
-    const code = result.codeResult.code;
-    if (code) onBarcodeDetected(code);
-  });
+  } catch(e) {
+    html5QrScanner = null;
+    showToast('⚠️ Permissão de câmera negada. Use busca manual.');
+  }
 }
 
-function stopScanner() {
-  if (quaggaRunning && typeof Quagga !== 'undefined') {
-    try { Quagga.stop(); } catch(e) {}
-    quaggaRunning = false;
+async function stopScanner() {
+  if (html5QrScanner) {
+    try { await html5QrScanner.stop(); html5QrScanner.clear(); } catch(e) {}
+    html5QrScanner = null;
   }
 }
 
